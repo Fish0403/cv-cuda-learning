@@ -52,7 +52,7 @@ int main() {
 
     // --- CV-CUDA GPU 测试 ---
     try {
-        // 分配内存: 输入是 Batch 的 Uint8, 输出是 Batch 的 Float32
+        // 分配内存
         nvcv::Tensor gpu_src({{batch, src_h, src_w, 3}, "NHWC"}, nvcv::TYPE_U8);
         nvcv::Tensor gpu_tmp({{batch, dst_h, dst_w, 3}, "NHWC"}, nvcv::TYPE_U8);
         nvcv::Tensor gpu_dst({{batch, dst_h, dst_w, 3}, "NHWC"}, nvcv::TYPE_F32);

@@ -1,0 +1,37 @@
+# --- Build Artifacts ---
+build/
+bin/
+obj/
+*.o
+*.a
+*.so
+*.lib
+*.dll
+my_app
+
+# --- CMake ---
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# --- Models (Large Files) ---
+*.engine
+*.onnx
+*.weights
+*.pb
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Logs & Temp ---
+*.log
+wget-log
+tmp/
