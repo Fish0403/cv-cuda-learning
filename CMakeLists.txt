@@ -1,45 +1,81 @@
 cmake_minimum_required(VERSION 3.18)
 project(cvcuda_benchmarks)
 
+# ==============================================================================
+# 1. 编译目标设置 (在这里切换文件名)
+# ==============================================================================
+set(TARGET_SRC "trt_preprocessing_benchmark.cpp") 
+set(TARGET_NAME "my_app")
+
 set(CMAKE_CXX_STANDARD 17)
 
-# --- 1. 查找依赖 ---
+# ==============================================================================
+# 2. 【核心依赖】 CUDA Toolkit (必选)
+# ==============================================================================
 find_package(CUDAToolkit REQUIRED)
+
+# ==============================================================================
+# 3. 【模块 A】 OpenCV (可选)
+#    如果不需要 OpenCV，请注释掉下面这两行以及下方的链接部分
+# ==============================================================================
 find_package(OpenCV REQUIRED)
 
-# --- 2. 设置 CV-CUDA 路径 ---
-set(CVCUDA_ROOT "/opt/nvidia/cvcuda0")
+# ==============================================================================
+# 4. 【模块 B】 CV-CUDA (可选)
+#    设置路径并确认包含路径
+# ==============================================================================
+set(CVCUDA_ROOT "/opt/nvidia/cvcuda0") 
 if(DEFINED ENV{CVCUDA_ROOT})
     set(CVCUDA_ROOT $ENV{CVCUDA_ROOT})
 endif()
 
-# --- 3. 配置编译目标 (在这里切换文件名) ---
-# 你只需要修改下面这一行，就能编译不同的程序
-set(TARGET_SRC "channel.cpp") 
-set(TARGET_NAME "my_app")
-
-# 定义可执行文件
+# ==============================================================================
+# 5. 配置执行目标
+# ==============================================================================
 add_executable(${TARGET_NAME} ${TARGET_SRC})
 
-# --- 4. 配置包含路径 (Target-based) ---
+# ==============================================================================
+# 6. 配置包含路径 (Header Search Paths)
+# ==============================================================================
 target_include_directories(${TARGET_NAME} PRIVATE 
-    ${CVCUDA_ROOT}/include
-    ${OpenCV_INCLUDE_DIRS}
+    ${CUDAToolkit_INCLUDE_DIRS}
+    # --- [TRT] TensorRT 头文件 ---
+    /usr/include/x86_64-linux-gnu   
+    # --- [OpenCV] 头文件 ---
+    ${OpenCV_INCLUDE_DIRS}          
+    # --- [CV-CUDA] 头文件 ---
+    ${CVCUDA_ROOT}/include          
 )
 
-# --- 5. 配置库和链接 ---
-target_link_directories(${TARGET_NAME} PRIVATE ${CVCUDA_ROOT}/lib)
+# ==============================================================================
+# 7. 配置库链接 (Linking Libraries)
+# ==============================================================================
 
-# 设置 RPATH 确保运行时能找到 .so
+# [CV-CUDA 专属] 设置库搜索目录和运行时 RPATH
+target_link_directories(${TARGET_NAME} PRIVATE ${CVCUDA_ROOT}/lib)
 set_target_properties(${TARGET_NAME} PROPERTIES BUILD_RPATH "${CVCUDA_ROOT}/lib")
 
-# 链接所有依赖
 target_link_libraries(${TARGET_NAME} PRIVATE 
+    # --- [CUDA] 核心运行时 ---
+    CUDA::cudart
+
+    # --- [TRT] TensorRT 推理引擎库 ---
+    nvinfer
+
+    # --- [OpenCV] 图像处理库 ---
+    ${OpenCV_LIBS}
+
+    # --- [CV-CUDA] GPU 加速预处理库 ---
     cvcuda 
     nvcv_types 
-    CUDA::cudart
-    ${OpenCV_LIBS}
 )
 
-# 打印信息确认
-message(STATUS "Now building: ${TARGET_SRC} as ${TARGET_NAME}")
+# ==============================================================================
+# 8. 状态打印确认
+# ==============================================================================
+message(STATUS "Build Configuration Summary:")
+message(STATUS "  Target        : ${TARGET_NAME}")
+message(STATUS "  Source        : ${TARGET_SRC}")
+message(STATUS "  CUDA version  : ${CUDAToolkit_VERSION}")
+message(STATUS "  OpenCV found  : ${OpenCV_VERSION}")
+message(STATUS "  CVCUDA path   : ${CVCUDA_ROOT}")
