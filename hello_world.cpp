@@ -21,6 +21,7 @@
 #include <iostream>
 #include <vector>
 #include <chrono>
+#include <filesystem>
 
 #define CHECK_CUDA(call)                                                 \
     {                                                                    \
@@ -52,8 +53,31 @@ int main(int argc, char* argv[]) {
     const int kernel_size = 5;
     const float sigma = 1.0f;
     
+    // Resolve a default sample image from common launch locations.
+    auto resolve_default_image = [argv]() -> std::string {
+        namespace fs = std::filesystem;
+        const fs::path sample_rel = fs::path("images") / "tabby_tiger_cat.jpg";
+        std::vector<fs::path> candidates = {
+            sample_rel,
+            fs::path("..") / sample_rel
+        };
+
+        if (argv && argv[0]) {
+            fs::path exe_dir = fs::path(argv[0]).parent_path();
+            if (!exe_dir.empty()) {
+                candidates.push_back(exe_dir / sample_rel);
+                candidates.push_back(exe_dir / ".." / sample_rel);
+            }
+        }
+
+        for (const auto& p : candidates) {
+            if (fs::exists(p)) return p.string();
+        }
+        return sample_rel.string();
+    };
+
     // Example supports one or multiple input image paths.
-    std::vector<std::string> input_files = {"images/tabby_tiger_cat.jpg"}; 
+    std::vector<std::string> input_files = {resolve_default_image()};
     if (argc > 1) {
         input_files.clear();
         for (int i = 1; i < argc; ++i) input_files.push_back(argv[i]);

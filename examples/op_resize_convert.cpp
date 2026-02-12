@@ -27,8 +27,7 @@ int main()
         cpu_srcs[i] = cv::Mat(src_h, src_w, CV_8UC3, cv::Scalar(100, 100, 100));
     }
 
-    std::cout << "Batch: " << batch << " (" << src_w << "x" << src_h << " -> " << dst_w << "x" << dst_h << ")\n"
-              << std::endl;
+    std::cout << "Batch: " << batch << " (" << src_w << "x" << src_h << " -> " << dst_w << "x" << dst_h << ")" << std::endl;
 
     // ========================
     // OpenCV section

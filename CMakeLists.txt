@@ -4,7 +4,7 @@ project(cvcuda_benchmarks)
 # ==============================================================================
 # 1. 编译目标设置 (在这里切换文件名)
 # ==============================================================================
-set(TARGET_SRC "trt_preprocessing_benchmark.cpp") 
+set(TARGET_SRC "hello_world.cpp") 
 set(TARGET_NAME "my_app")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -46,6 +46,13 @@ target_include_directories(${TARGET_NAME} PRIVATE
     # --- [CV-CUDA] 头文件 ---
     ${CVCUDA_ROOT}/include          
 )
+
+# 只要编译 examples/ 下的源码，就加 examples 头文件路径（如 common.hpp）
+if(TARGET_SRC MATCHES "^examples/.*")
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/examples
+    )
+endif()
 
 # ==============================================================================
 # 7. 配置库链接 (Linking Libraries)
