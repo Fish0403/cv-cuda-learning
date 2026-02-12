@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
     const int kernel_size = 5;
     const float sigma = 1.0f;
     
-    // 示例使用单张或多张图片路径
+    // Example supports one or multiple input image paths.
     std::vector<std::string> input_files = {"images/tabby_tiger_cat.jpg"}; 
     if (argc > 1) {
         input_files.clear();
@@ -74,18 +74,18 @@ int main(int argc, char* argv[]) {
                     continue;
                 }
                 
-                // 分配显存并上传
+                // Allocate temporary device buffer and upload image.
                 size_t img_bytes = img.total() * img.elemSize();
                 uint8_t* d_img_ptr;
                 CHECK_CUDA(cudaMalloc(&d_img_ptr, img_bytes));
                 CHECK_CUDA(cudaMemcpyAsync(d_img_ptr, img.data, img_bytes, cudaMemcpyHostToDevice, stream));
 
-                // 包装为 CV-CUDA Tensor (NHWC)
+                // Wrap image into a CV-CUDA tensor (NHWC).
                 input_tensors.emplace_back(nvcv::Tensor({{1, img.rows, img.cols, 3}, "NHWC"}, nvcv::TYPE_U8));
                 auto data = input_tensors.back().exportData<nvcv::TensorDataStridedCuda>();
                 CHECK_CUDA(cudaMemcpy2DAsync(data->basePtr(), data->stride(1), d_img_ptr, img.cols * 3, img.cols * 3, img.rows, cudaMemcpyDeviceToDevice, stream));
                 
-                CHECK_CUDA(cudaFree(d_img_ptr)); // 临时 Buffer 可释放
+                CHECK_CUDA(cudaFree(d_img_ptr)); // Temporary buffer can be released.
             }
         }
 
@@ -102,8 +102,8 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // 3. Batch images into a single Tensor
-        // 在 C++ 中，Batch 通常通过构造一个新的 Tensor 并拷贝数据实现
+        // 3. Batch images into a single Tensor.
+        // In C++, batching is commonly done by allocating a batch tensor and copying sample data into it.
         int batch_size = resized_tensors.size();
         nvcv::Tensor batch_tensor({{batch_size, target_height, target_width, 3}, "NHWC"}, nvcv::TYPE_U8);
         {
