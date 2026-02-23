@@ -16,10 +16,15 @@
 #include <nvcv/TensorData.hpp>
 #include <cuda_runtime.h>
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/cuda.hpp>
+#include <opencv2/core/cuda_stream_accessor.hpp>
+#include <opencv2/cudaarithm.hpp>
+#include <opencv2/cudawarping.hpp>
 #include <iostream>
 #include <vector>
 #include <chrono>
 #include <fstream>
+#include <algorithm>
 #include <NvInfer.h>
 
 #define CHECK_CUDA(call)                                                 \
@@ -123,9 +128,62 @@ int main() {
         std::cout << std::chrono::duration<double, std::milli>(end - start).count() << " ms" << std::endl;
     }
 
-    // --- Method B: GPU preprocessing (CV-CUDA optimized fused batch) ---
+    // --- Method B: GPU preprocessing baseline (OpenCV CUDA non-fused) ---
     {
-        std::cout << "Method B (GPU Pre - Optimized Fused): ";
+        std::cout << "Method B (GPU Pre - OpenCV CUDA): ";
+        if (cv::cuda::getCudaEnabledDeviceCount() <= 0) {
+            std::cout << "SKIPPED (no OpenCV CUDA device)" << std::endl;
+        } else {
+            cv::cuda::setDevice(0);
+            static cv::cuda::Stream cvStream;
+            cudaStream_t stream = cv::cuda::StreamAccessor::getStream(cvStream);
+
+            static uint8_t* d_full_img = nullptr;
+            if (!d_full_img) CHECK_CUDA(cudaMalloc(&d_full_img, img_size));
+
+            static float* d_trt_input_nchw = nullptr;
+            if (!d_trt_input_nchw) CHECK_CUDA(cudaMalloc(&d_trt_input_nchw, batch_size * 3 * crop_size * crop_size * sizeof(float)));
+
+            // Warmup.
+            CHECK_CUDA(cudaMemcpyAsync(d_full_img, h_pinned_input, img_size, cudaMemcpyHostToDevice, stream));
+            CHECK_CUDA(cudaStreamSynchronize(stream));
+
+            auto start = std::chrono::high_resolution_clock::now();
+            CHECK_CUDA(cudaMemcpyAsync(d_full_img, h_pinned_input, img_size, cudaMemcpyHostToDevice, stream));
+
+            cv::cuda::GpuMat full_img(height, width, CV_8UC3, d_full_img, static_cast<size_t>(width * 3));
+            for (int b = 0; b < total_batches; ++b) {
+                int current_batch_size = std::min(batch_size, total_patches - b * batch_size);
+                for (int i = 0; i < current_batch_size; ++i) {
+                    NVCVRectI r = all_rois[b * batch_size + i];
+                    cv::cuda::GpuMat roi(full_img, cv::Rect(r.x, r.y, r.width, r.height));
+
+                    cv::cuda::GpuMat resized;
+                    cv::cuda::resize(roi, resized, cv::Size(crop_size, crop_size), 0.0, 0.0, cv::INTER_LINEAR, cvStream);
+
+                    cv::cuda::GpuMat f32;
+                    resized.convertTo(f32, CV_32FC3, 1.0 / 255.0, 0.0, cvStream);
+
+                    float* base = d_trt_input_nchw + i * (3 * crop_size * crop_size);
+                    cv::cuda::GpuMat ch0(crop_size, crop_size, CV_32FC1, base, static_cast<size_t>(crop_size * sizeof(float)));
+                    cv::cuda::GpuMat ch1(crop_size, crop_size, CV_32FC1, base + crop_size * crop_size,
+                                         static_cast<size_t>(crop_size * sizeof(float)));
+                    cv::cuda::GpuMat ch2(crop_size, crop_size, CV_32FC1, base + 2 * crop_size * crop_size,
+                                         static_cast<size_t>(crop_size * sizeof(float)));
+                    std::vector<cv::cuda::GpuMat> channels{ch0, ch1, ch2};
+                    cv::cuda::split(f32, channels, cvStream);
+                }
+            }
+
+            CHECK_CUDA(cudaStreamSynchronize(stream));
+            auto end = std::chrono::high_resolution_clock::now();
+            std::cout << std::chrono::duration<double, std::milli>(end - start).count() << " ms" << std::endl;
+        }
+    }
+
+    // --- Method C: GPU preprocessing (CV-CUDA optimized fused batch) ---
+    {
+        std::cout << "Method C (GPU Pre - CV-CUDA Fused): ";
         static cudaStream_t stream = nullptr;
         if (!stream) CHECK_CUDA(cudaStreamCreate(&stream));
         static uint8_t* d_full_img = nullptr;
@@ -188,7 +246,13 @@ int main() {
         std::cout << std::chrono::duration<double, std::milli>(end - start).count() << " ms" << std::endl;
 
         // Inference sanity check.
-        context->setInputShape(input_name, nvinfer1::Dims4{batch_size, 3, crop_size, crop_size});
+        const nvinfer1::Dims4 runShape{batch_size, 3, crop_size, crop_size};
+        if (!context->setInputShape(input_name, runShape)) {
+            std::cerr << "[TRT] Failed to set input shape to "
+                      << runShape.d[0] << "x" << runShape.d[1] << "x"
+                      << runShape.d[2] << "x" << runShape.d[3] << std::endl;
+            return -1;
+        }
         context->setTensorAddress(input_name, d_trt_input_nchw);
         context->setTensorAddress(output_name, d_output);
         context->enqueueV3(stream);

@@ -11,6 +11,8 @@
 //   for this workload.
 
 #include <cvcuda/OpAverageBlur.hpp>
+#include <opencv2/core/cuda.hpp>
+#include <opencv2/cudafilters.hpp>
 
 #include "common.hpp"
 
@@ -20,7 +22,7 @@ int main()
     const int width = 5120;
     const int height = 5120;
     const int channels = 1;
-    const int kernel = 29;
+    const int kernel = 7;
     const int warmup = 3;
     const int iters = 10;
 
@@ -32,15 +34,10 @@ int main()
     std::cout << "Image: " << width << "x" << height << "x" << channels << "\n";
     std::cout << "Kernel: " << kernel << "x" << kernel << ", warmup=" << warmup << ", iters=" << iters << "\n";
 
-    // ========================
-    // OpenCV section
-    // ========================
+    PrintSectionHeader(1, "OpenCV CPU");
     try {
-        {
-            Timer t("OpenCV CPU Warmup (AverageBlur)");
-            for (int i = 0; i < warmup; ++i) {
-                cv::blur(cpu_src, cpu_dst, cv::Size(kernel, kernel), cv::Point(-1, -1), cv::BORDER_REPLICATE);
-            }
+        for (int i = 0; i < warmup; ++i) {
+            cv::blur(cpu_src, cpu_dst, cv::Size(kernel, kernel), cv::Point(-1, -1), cv::BORDER_REPLICATE);
         }
         {
             Timer t("OpenCV CPU Benchmark (AverageBlur)");
@@ -54,9 +51,51 @@ int main()
         return 1;
     }
 
-    // ========================
-    // CV-CUDA section
-    // ========================
+    PrintSectionHeader(2, "OpenCV CUDA");
+    cv::Mat opencv_cuda_dst(height, width, CV_8UC1);
+    bool hasOpenCvCuda = false;
+    try {
+        if (cv::cuda::getCudaEnabledDeviceCount() <= 0) {
+            std::cout << "OpenCV CUDA skipped: no CUDA device found by OpenCV.\n";
+        } else {
+            hasOpenCvCuda = true;
+            cv::cuda::setDevice(0);
+            cv::cuda::Stream cvStream;
+            cv::cuda::GpuMat dSrc, dDst;
+            cv::Ptr<cv::cuda::Filter> blurFilter
+                = cv::cuda::createBoxFilter(CV_8UC1, CV_8UC1, cv::Size(kernel, kernel), cv::Point(-1, -1),
+                                            cv::BORDER_REPLICATE);
+
+            {
+                Timer t("OpenCV CUDA H2D upload(gray)");
+                dSrc.upload(cpu_src, cvStream);
+                cvStream.waitForCompletion();
+            }
+
+            for (int i = 0; i < warmup; ++i) {
+                blurFilter->apply(dSrc, dDst, cvStream);
+            }
+            cvStream.waitForCompletion();
+
+            {
+                Timer t("OpenCV CUDA Benchmark (AverageBlur)");
+                for (int i = 0; i < iters; ++i) {
+                    blurFilter->apply(dSrc, dDst, cvStream);
+                }
+                cvStream.waitForCompletion();
+            }
+
+            {
+                Timer t("OpenCV CUDA D2H download(gray)");
+                dDst.download(opencv_cuda_dst, cvStream);
+                cvStream.waitForCompletion();
+            }
+        }
+    } catch (const cv::Exception &e) {
+        std::cout << "OpenCV CUDA skipped: " << e.what() << "\n";
+    }
+
+    PrintSectionHeader(3, "CV-CUDA");
     cudaStream_t stream = nullptr;
     try {
         CUDA_CHECK(cudaStreamCreate(&stream));
@@ -71,7 +110,7 @@ int main()
         }
 
         {
-            Timer t("H2D upload(gray)");
+            Timer t("CV-CUDA H2D upload(gray)");
             CUDA_CHECK(cudaMemcpy2DAsync(in_data->basePtr(), in_data->stride(1), cpu_src.data, cpu_src.step,
                                          static_cast<size_t>(width * channels), height, cudaMemcpyHostToDevice,
                                          stream));
@@ -80,16 +119,13 @@ int main()
 
         cvcuda::AverageBlur avg_blur({kernel, kernel}, 1);
 
-        {
-            Timer t("CV-CUDA GPU Warmup (AverageBlur)");
-            for (int i = 0; i < warmup; ++i) {
-                avg_blur(stream, gpu_in, gpu_out, {kernel, kernel}, {-1, -1}, NVCV_BORDER_REPLICATE);
-            }
-            CUDA_CHECK(cudaStreamSynchronize(stream));
+        for (int i = 0; i < warmup; ++i) {
+            avg_blur(stream, gpu_in, gpu_out, {kernel, kernel}, {-1, -1}, NVCV_BORDER_REPLICATE);
         }
+        CUDA_CHECK(cudaStreamSynchronize(stream));
 
         {
-            Timer t("CV-CUDA GPU Benchmark (AverageBlur)");
+            Timer t("CV-CUDA Benchmark (AverageBlur)");
             for (int i = 0; i < iters; ++i) {
                 avg_blur(stream, gpu_in, gpu_out, {kernel, kernel}, {-1, -1}, NVCV_BORDER_REPLICATE);
             }
@@ -98,31 +134,16 @@ int main()
 
         cv::Mat gpu_dst(height, width, CV_8UC1);
         {
-            Timer t("D2H download(gray)");
+            Timer t("CV-CUDA D2H download(gray)");
             CUDA_CHECK(cudaMemcpy2D(gpu_dst.data, gpu_dst.step, out_data->basePtr(), out_data->stride(1),
                                     static_cast<size_t>(width * channels), height, cudaMemcpyDeviceToHost));
         }
 
-        int mismatches = 0;
-        int max_abs_diff = 0;
-        for (int y = 0; y < height; ++y) {
-            const uchar *cpu_row = cpu_dst.ptr<uchar>(y);
-            const uchar *gpu_row = gpu_dst.ptr<uchar>(y);
-            for (int x = 0; x < width; ++x) {
-                int diff = std::abs(static_cast<int>(cpu_row[x]) - static_cast<int>(gpu_row[x]));
-                if (diff != 0) {
-                    ++mismatches;
-                    if (diff > max_abs_diff) {
-                        max_abs_diff = diff;
-                    }
-                }
-            }
+        PrintSectionHeader(4, "Compare");
+        if (hasOpenCvCuda) {
+            PrintCompareResult("Compare OpenCV CPU vs OpenCV CUDA", CompareImagesU8(cpu_dst, opencv_cuda_dst));
         }
-
-        std::cout << "Compare CPU vs GPU: "
-                  << (mismatches == 0 ? "IDENTICAL" : "DIFFERENT")
-                  << ", mismatches=" << mismatches
-                  << ", max_abs_diff=" << max_abs_diff << "\n";
+        PrintCompareResult("Compare OpenCV CPU vs CV-CUDA", CompareImagesU8(cpu_dst, gpu_dst));
 
     } catch (const std::exception &e) {
         std::cerr << "CV-CUDA Error: " << e.what() << std::endl;

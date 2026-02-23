@@ -8,15 +8,15 @@
 
 ## 🚀 项目简介 / Introduction
 
-在高性能 AI 推理场景中，**预处理（Preprocessing）** 往往是制约系统吞吐量的核心瓶颈。本项目通过实测对比，展示了如何利用 NVIDIA **CV-CUDA** 的融合算子（Fused Operators）极大程度消除 CPU 瓶颈，实现从原始图像到推理结果的纯 GPU 高速流水线。
+在高性能 AI 推理场景中，**预处理（Preprocessing）** 往往是制约系统吞吐量的核心瓶颈。本项目聚焦 OpenCV CPU、OpenCV CUDA、CV-CUDA 三种实现的实测对比，覆盖算子级和流程级性能，并明确区分 **Kernel 时间** 与 **端到端时间（含 H2D/D2H）**。
 
-In high-performance AI inference, **preprocessing** is often the bottleneck. This project demonstrates how to effectively bypass CPU overhead by using NVIDIA **CV-CUDA** fused operators, creating a high-throughput GPU-centric pipeline.
+In high-performance AI inference, **preprocessing** is often the bottleneck. This project benchmarks OpenCV CPU, OpenCV CUDA, and CV-CUDA at both operator and pipeline levels, and separates **kernel time** from **end-to-end latency (including H2D/D2H transfers)**.
 
 ## 💻 测试平台 / Test Platform
 
 - **CPU**: Intel Core i7-12700F
 - **GPU**: NVIDIA GeForce RTX 4070 (12GB)
-- **Software**: CUDA 12.x, TensorRT 10.10, CV-CUDA 0.x
+- **Software**: Ubuntu 22.04, CUDA 12.x, OpenCV 4.11, TensorRT 10.10, CV-CUDA 0.x
 
 ## 🛠️ 核心加速技术 / Key Features
 
@@ -27,19 +27,60 @@ In high-performance AI inference, **preprocessing** is often the bottleneck. Thi
 
 ## 📊 性能对标 / Benchmark
 
-**测试环境：** 4480x4480 大图 -> 224x224 切片 x 400 张 (Batch Size = 25)
+### 1) 典型推理流程（Preprocess + Inference）三者对比
+
+**测试条件（单次实测）：**
+- 输入图：`4480x4480`（`224x224` 网格切片，共 `400` patches）
+- 预处理批次：`batch_size=25`（共 `16` 个 batch）
+- 模型：`model.onnx -> model.engine`（动态输入，`min=1x3x224x224`, `opt=25x3x224x224`, `max=96x3x224x224`）
+- 统计口径：下表时间均为**处理完 400 张 patch 的总预处理时间**（非单 batch 时间）
 
 | 方案 / Method | 预处理技术 / Technology | 耗时 / Latency | 吞吐量提升 / Speedup |
 | :--- | :--- | :--- | :--- |
-| **Method A** | Standard OpenCV (SIMD Optimized) | ~32.3 ms | Baseline |
-| **Method B** | **CV-CUDA Accelerated (Fused Batch)** | **~7.5 ms** | **⚡ 4.3x Faster** |
+| **Method A** | Standard OpenCV (SIMD Optimized) | 40.0936 ms | Baseline |
+| **Method B** | OpenCV CUDA Pipeline (Non-Fused) | 27.3381 ms | 1.47x |
+| **Method C** | **CV-CUDA Accelerated (Fused Batch)** | **7.6871 ms** | **5.22x** |
+
+### 2) 算子级对比（examples）
+
+#### `op_average_blur` 三者时间对比（单次实测）
+
+**配置：** `Image=5120x5120x1`, `Kernel=7x7`, `warmup=3`, `iters=10`
+
+| 方法 | H2D (ms) | Kernel Benchmark (ms) | D2H (ms) | Total (ms) |
+| :--- | :---: | :---: | :---: | :---: |
+| OpenCV CPU | N/A | 130.327 | N/A | 130.327 |
+| OpenCV CUDA | 5.9028 | 24.8877 | 14.7654 | 45.5559 |
+| CV-CUDA | 5.3105 | 22.7692 | 15.1054 | 43.1851 |
+
+#### `op_resize` 三者时间对比
+
+**配置：** `Batch=1`, `5120x5120 -> 4480x4480`, `warmup=3`
+
+| 方法 | H2D (ms) | Kernel Benchmark (ms) | D2H (ms) | Total (ms) |
+| :--- | :---: | :---: | :---: | :---: |
+| OpenCV CPU | N/A | 8.5855 | N/A | 8.5855 |
+| OpenCV CUDA | 14.3371 | 0.3861 | 25.5832 | 40.3064 |
+| CV-CUDA | 15.9585 | 0.3594 | 33.8105 | 50.1284 |
+
+#### `op_warp_affine` 三者时间对比
+
+**配置：** `Image=8200x6000(gray)`, `angle=5 deg`, `warmup=3`
+
+| 方法 | H2D (ms) | Kernel Benchmark (ms) | D2H (ms) | Total (ms) |
+| :--- | :---: | :---: | :---: | :---: |
+| OpenCV CPU | N/A | 14.3759 | N/A | 14.3759 |
+| OpenCV CUDA | 10.4717 | 0.6265 | 28.0645 | 39.1627 |
+| CV-CUDA | 11.5325 | 3.1897 | 27.6091 | 42.3313 |
 
 ## 📂 项目结构 / Structure
 
 - `trt_preprocessing_benchmark.cpp`: **[核心]** 预处理对比与端到端推理测试。
 - `hello_world.cpp`: CV-CUDA 入门示例。
 - `examples/`:
-  - `opencv_cvcuda_comparison.cpp`: 基础算子（Crop/Resize等）的性能对比示例。
+  - `op_resize.cpp`: OpenCV CPU / OpenCV CUDA / CV-CUDA 的 Resize 对比。
+  - `op_average_blur.cpp`: OpenCV CPU / OpenCV CUDA / CV-CUDA 的均值模糊对比。
+  - `op_warp_affine.cpp`: OpenCV CPU / OpenCV CUDA / CV-CUDA 的仿射变换对比。
 - `1_Basic_Setup.md`: 环境搭建指南。
 - `2_CUDA_And_CV-CUDA_Setup.md`: 深度优化配置参考。
 
@@ -49,7 +90,9 @@ In high-performance AI inference, **preprocessing** is often the bottleneck. Thi
 mkdir build && cd build
 cmake ..
 make
-./my_app
+./op_resize
+./op_average_blur
+./op_warp_affine
 ```
 
 ---
