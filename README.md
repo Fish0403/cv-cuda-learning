@@ -1,4 +1,4 @@
-# ⚡ CV-CUDA & TensorRT: Full-Pipeline Acceleration
+# ⚡ CV-CUDA & TensorRT: Preprocess Benchmark
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Technology: CV-CUDA](https://img.shields.io/badge/Tech-CV--CUDA-green)](https://github.com/CVCUDA/CV-CUDA)
@@ -30,16 +30,16 @@ In high-performance AI inference, **preprocessing** is often the bottleneck. Thi
 ### 1) 典型推理流程（Preprocess + Inference）三者对比
 
 **测试条件（单次实测）：**
-- 输入图：`4480x4480`（`224x224` 网格切片，共 `400` patches）
+- 输入图：`5120x5120`（`20x20` 网格切分，`overlap=20px`，共 `400` patches）
 - 预处理批次：`batch_size=25`（共 `16` 个 batch）
 - 模型：`model.onnx -> model.engine`（动态输入，`min=1x3x224x224`, `opt=25x3x224x224`, `max=96x3x224x224`）
 - 统计口径：下表时间均为**处理完 400 张 patch 的总预处理时间**（非单 batch 时间）
 
 | 方案 / Method | 预处理技术 / Technology | 耗时 / Latency | 吞吐量提升 / Speedup |
 | :--- | :--- | :--- | :--- |
-| **Method A** | Standard OpenCV (SIMD Optimized) | 40.0936 ms | Baseline |
-| **Method B** | OpenCV CUDA Pipeline (Non-Fused) | 27.3381 ms | 1.47x |
-| **Method C** | **CV-CUDA Accelerated (Fused Batch)** | **7.6871 ms** | **5.22x** |
+| **Method A** | Standard OpenCV (SIMD Optimized) | 65.6852 ms | Baseline |
+| **Method B** | OpenCV CUDA Pipeline (Non-Fused) | 28.9898 ms | 2.27x |
+| **Method C** | **CV-CUDA Accelerated (Fused Batch)** | **9.2169 ms** | **7.13x** |
 
 ### 2) 算子级对比（examples）
 
@@ -76,6 +76,7 @@ In high-performance AI inference, **preprocessing** is often the bottleneck. Thi
 ## 📂 项目结构 / Structure
 
 - `trt_preprocessing_benchmark.cpp`: **[核心]** 预处理对比与端到端推理测试。
+- `cvcuda_preprocess_only.cpp`: 仅 CV-CUDA 融合预处理链路测试（不含 TensorRT）。
 - `hello_world.cpp`: CV-CUDA 入门示例。
 - `examples/`:
   - `op_resize.cpp`: OpenCV CPU / OpenCV CUDA / CV-CUDA 的 Resize 对比。
@@ -93,6 +94,7 @@ make
 ./op_resize
 ./op_average_blur
 ./op_warp_affine
+./trt_preprocessing_benchmark
 ```
 
 ---

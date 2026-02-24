@@ -50,20 +50,52 @@ int main() {
     const char* engine_path = "model.engine"; // TensorRT engine file path.
 
     // Image/grid configuration.
-    const int width = 224 * 20;
-    const int height = 224 * 20;
-    const int crop_size = 224;
+    const int width = 5120;
+    const int height = 5120;
+    const int crop_size = 224;   // Model input size after resize.
+    const int grid_x = 20;       // Number of tiles along width.
+    const int grid_y = 20;       // Number of tiles along height.
+    const int overlap_px = 20;   // Overlap (pixels) between adjacent tiles.
     const int batch_size = 25;
     const int channels = 3;
     const int num_classes = 2;
 
-    int num_x = width / crop_size;
-    int num_y = height / crop_size;
+    if (grid_x <= 0 || grid_y <= 0) {
+        std::cerr << "grid_x and grid_y must be > 0" << std::endl;
+        return -1;
+    }
+    if (overlap_px < 0) {
+        std::cerr << "overlap_px must be >= 0" << std::endl;
+        return -1;
+    }
+
+    const int roi_w = std::max(1, (width + (grid_x - 1) * overlap_px + grid_x - 1) / grid_x);
+    const int roi_h = std::max(1, (height + (grid_y - 1) * overlap_px + grid_y - 1) / grid_y);
+    if (roi_w > width || roi_h > height) {
+        std::cerr << "computed ROI is larger than input image; reduce overlap or grid count" << std::endl;
+        return -1;
+    }
+    if (overlap_px >= roi_w || overlap_px >= roi_h) {
+        std::cerr << "overlap_px must be smaller than ROI size" << std::endl;
+        return -1;
+    }
+
+    const int step_x = (grid_x == 1) ? 0 : (roi_w - overlap_px);
+    const int step_y = (grid_y == 1) ? 0 : (roi_h - overlap_px);
+    int num_x = grid_x;
+    int num_y = grid_y;
     int total_patches = num_x * num_y;
     int total_batches = (total_patches + batch_size - 1) / batch_size;
 
     size_t img_size = (size_t)width * height * channels;
-    std::cout << "Image: " << width << "x" << height << " (" << total_patches << " patches)" << std::endl;
+    std::cout << "Image: " << width << "x" << height << std::endl;
+    std::cout << "Grid: " << grid_x << "x" << grid_y
+              << ", overlap=" << overlap_px << " px"
+              << ", ROI=" << roi_w << "x" << roi_h
+              << ", model_input=" << crop_size << "x" << crop_size
+              << ", patches=" << total_patches
+              << ", batch_size=" << batch_size
+              << ", batches=" << total_batches << std::endl;
 
     uint8_t* h_pinned_input;
     CHECK_CUDA(cudaHostAlloc(&h_pinned_input, img_size, cudaHostAllocDefault));
@@ -72,7 +104,9 @@ int main() {
     std::vector<NVCVRectI> all_rois;
     for (int y = 0; y < num_y; ++y) {
         for (int x = 0; x < num_x; ++x) {
-            all_rois.push_back({x * crop_size, y * crop_size, crop_size, crop_size});
+            int rx = (grid_x == 1) ? 0 : std::min(x * step_x, width - roi_w);
+            int ry = (grid_y == 1) ? 0 : std::min(y * step_y, height - roi_h);
+            all_rois.push_back({rx, ry, roi_w, roi_h});
         }
     }
 
@@ -110,7 +144,9 @@ int main() {
             int current_batch_size = std::min(batch_size, total_patches - b * batch_size);
             for (int i = 0; i < current_batch_size; ++i) {
                 NVCVRectI r = all_rois[b * batch_size + i];
-                cv::Mat crop = cpu_img(cv::Rect(r.x, r.y, crop_size, crop_size));
+                cv::Mat roi = cpu_img(cv::Rect(r.x, r.y, r.width, r.height));
+                cv::Mat crop;
+                cv::resize(roi, crop, cv::Size(crop_size, crop_size), 0.0, 0.0, cv::INTER_LINEAR);
                 cv::Mat float_crop;
                 crop.convertTo(float_crop, CV_32FC3, 1.0/255.0);
                 float* base = h_pinned_batch + i * (3 * crop_size * crop_size);
@@ -190,7 +226,7 @@ int main() {
         if (!d_full_img) CHECK_CUDA(cudaMalloc(&d_full_img, img_size));
         
         static uint8_t* d_batch_u8 = nullptr;
-        if (!d_batch_u8) CHECK_CUDA(cudaMalloc(&d_batch_u8, batch_size * crop_size * crop_size * 3));
+        if (!d_batch_u8) CHECK_CUDA(cudaMalloc(&d_batch_u8, batch_size * roi_w * roi_h * 3));
 
         static float* d_trt_input_nchw = nullptr;
         if (!d_trt_input_nchw) CHECK_CUDA(cudaMalloc(&d_trt_input_nchw, batch_size * 3 * crop_size * crop_size * sizeof(float)));
@@ -198,7 +234,7 @@ int main() {
         static cvcuda::ResizeCropConvertReformat fused_op;
 
         // Create tensors once to avoid per-iteration object construction.
-        nvcv::Tensor batch_u8_tensor({{batch_size, crop_size, crop_size, 3}, "NHWC"}, nvcv::TYPE_U8);
+        nvcv::Tensor batch_u8_tensor({{batch_size, roi_h, roi_w, 3}, "NHWC"}, nvcv::TYPE_U8);
         nvcv::Tensor batch_f32_tensor({{batch_size, 3, crop_size, crop_size}, "NCHW"}, nvcv::TYPE_F32);
         
         auto u8_data = batch_u8_tensor.exportData<nvcv::TensorDataStridedCuda>();
@@ -220,15 +256,15 @@ int main() {
             for (int i = 0; i < current_batch_size; ++i) {
                 NVCVRectI r = all_rois[b * batch_size + i];
                 CHECK_CUDA(cudaMemcpy2DAsync(
-                    d_batch_u8 + i * crop_size * crop_size * 3, crop_size * 3,
+                    d_batch_u8 + i * roi_w * roi_h * 3, roi_w * 3,
                     d_full_img + r.y * width * 3 + r.x * 3, width * 3,
-                    crop_size * 3, crop_size,
+                    roi_w * 3, roi_h,
                     cudaMemcpyDeviceToDevice, stream
                 ));
             }
 
             // 3) Copy gathered ROI buffer into tensor memory.
-            CHECK_CUDA(cudaMemcpyAsync(u8_data->basePtr(), d_batch_u8, current_batch_size * crop_size * crop_size * 3, cudaMemcpyDeviceToDevice, stream));
+            CHECK_CUDA(cudaMemcpyAsync(u8_data->basePtr(), d_batch_u8, current_batch_size * roi_w * roi_h * 3, cudaMemcpyDeviceToDevice, stream));
 
             // 4) Run fused preprocessing operator once per batch (outside ROI loop).
             fused_op(stream, batch_u8_tensor, batch_f32_tensor, 
