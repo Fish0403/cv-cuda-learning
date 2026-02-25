@@ -1,4 +1,4 @@
-# ⚡ CV-CUDA & TensorRT: Preprocess Benchmark
+# cvcuda-opencv-preprocess-bench
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Technology: CV-CUDA](https://img.shields.io/badge/Tech-CV--CUDA-green)](https://github.com/CVCUDA/CV-CUDA)
