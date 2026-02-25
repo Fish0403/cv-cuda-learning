@@ -28,7 +28,9 @@ In high-performance AI inference, **preprocessing** is often the bottleneck. Thi
 
 ## 📊 性能对标 / Benchmark
 
-### 1) 三种预处理方案对比（OpenCV CPU / OpenCV CUDA / CV-CUDA）
+### A) 流程级（Pipeline-Level）对比
+
+#### A1) 三种预处理方案对比（OpenCV CPU / OpenCV CUDA / CV-CUDA）
 
 **测试条件（单次实测）：**
 - 输入图：`5120x5120`（`20x20` 网格切分，`overlap=20px`，共 `400` patches）
@@ -42,7 +44,7 @@ In high-performance AI inference, **preprocessing** is often the bottleneck. Thi
 | **Method B** | OpenCV CUDA Pipeline (Non-Fused) | 28.9898 ms | 2.27x |
 | **Method C** | **CV-CUDA Accelerated (Fused Batch)** | **9.2169 ms** | **7.13x** |
 
-### 2) 上传 与（CV-CUDA预处理 + TRT推理）流水并行
+#### A2) 上传 与（CV-CUDA预处理 + TRT推理）流水并行
 
 **测试条件（`trt_cvcuda_pipeline_overlap_benchmark`）：**
 - `Batches=120`, `batch_size=25`
@@ -80,7 +82,9 @@ copy_stream:   [Upload b0] [Upload b1] [Upload b2] [Upload b3] ...
 proc_stream:    [Pre+Infer b0][Pre+Infer b1][Pre+Infer b2][Pre+Infer b3] ...
 ```
 
-### 3) 算子级对比（examples）
+### B) 算子级（Operator-Level）对比
+
+#### B1) 基础算子对比（examples）
 
 #### `op_average_blur` 三者时间对比（单次实测）
 
@@ -112,10 +116,27 @@ proc_stream:    [Pre+Infer b0][Pre+Infer b1][Pre+Infer b2][Pre+Infer b3] ...
 | OpenCV CUDA | 10.4717 | 0.6265 | 28.0645 | 39.1627 |
 | CV-CUDA | 11.5325 | 3.1897 | 27.6091 | 42.3313 |
 
+从基础算子结果可以看到，OpenCV CUDA 在小算子反复调用场景下仍有明显提交开销，因此这里进一步测试其引入 CUDA Graph 后的收益；CV-CUDA 保持 fused 形态作为性能参考对照。
+
+#### B2) OpenCV CUDA 引入 CUDA Graph 后的对比（含 CV-CUDA 参考）
+
+CUDA Graph 可将 OpenCV CUDA 的重复预处理调用由“逐次提交”变为“图执行”，以降低 launch 开销。
+
+**测试条件（`opencv_cuda_graph_benchmark`）：**
+- `Image=5120x5120`, `batch=25`, `crop=224x224`, `iters=200`
+- 统计口径：`avg` 为单次迭代平均耗时（越低越好）
+
+| 方法 | 总耗时 (200 iters) | 平均耗时 (ms/iter) | 相对 OpenCV Non-Graph |
+| :---: | :---: | :---: | :---: |
+| OpenCV CUDA Non-Graph | 76.0414 ms | 0.380207 | 1.00x |
+| OpenCV CUDA Graph | 45.7790 ms | 0.228895 | 1.66105x |
+| CV-CUDA Fused(op) | 23.0427 ms | 0.115214 | 3.30002x |
+
 ## 📂 项目结构 / Structure
 
 - `trt_preprocessing_benchmark.cpp`: **[核心]** 工业常规流程下三种预处理方案对比（OpenCV CPU / OpenCV CUDA / CV-CUDA）。
 - `trt_cvcuda_pipeline_overlap_benchmark.cpp`: 上传 与（CV-CUDA预处理 + TRT推理）流水并行对比（Serial vs Overlap）。
+- `opencv_cuda_graph_benchmark.cpp`: OpenCV CUDA Non-Graph / OpenCV CUDA Graph / CV-CUDA Fused(op) 预处理算子基准对比。
 - `hello_world.cpp`: CV-CUDA 入门示例。
 - `examples/`:
   - `op_resize.cpp`: OpenCV CPU / OpenCV CUDA / CV-CUDA 的 Resize 对比。
@@ -131,11 +152,7 @@ proc_stream:    [Pre+Infer b0][Pre+Infer b1][Pre+Infer b2][Pre+Infer b3] ...
 mkdir build && cd build
 cmake ..
 make
-./op_resize
-./op_average_blur
-./op_warp_affine
-./trt_preprocessing_benchmark
-./trt_cvcuda_pipeline_overlap_benchmark
+./hello_world
 ```
 
 ---
