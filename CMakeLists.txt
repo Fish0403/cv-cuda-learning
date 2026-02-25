@@ -6,6 +6,7 @@ project(cvcuda_benchmarks)
 # ==============================================================================
 set(EXAMPLE_SOURCES
     hello_world.cpp
+    # opencv_cuda_graph_benchmark.cpp
     # examples/op_resize.cpp
     # examples/op_average_blur.cpp
     # examples/op_warp_affine.cpp
