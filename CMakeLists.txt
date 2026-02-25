@@ -5,10 +5,12 @@ project(cvcuda_benchmarks)
 # 1. 编译目标设置
 # ==============================================================================
 set(EXAMPLE_SOURCES
-    examples/op_resize.cpp
-    examples/op_average_blur.cpp
-    examples/op_warp_affine.cpp
-    trt_preprocessing_benchmark.cpp
+    hello_world.cpp
+    # examples/op_resize.cpp
+    # examples/op_average_blur.cpp
+    # examples/op_warp_affine.cpp
+    # trt_preprocessing_benchmark.cpp
+    # trt_cvcuda_pipeline_overlap_benchmark.cpp
 )
 
 set(CMAKE_CXX_STANDARD 17)
